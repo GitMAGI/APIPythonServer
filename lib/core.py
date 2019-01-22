@@ -1,8 +1,11 @@
 from flask import Flask, request, Response
 from werkzeug.exceptions import BadRequest, HTTPException, Forbidden, Unauthorized, NotAcceptable, NotFound
+from datetime import datetime
+import uuid
+import traceback
 from inspect import getmembers
 from pprint import pprint
-
+from logger import Logger
 import sys, os
 sys.path.insert(1, os.path.join(sys.path[0], '..')) #Shortcut to import from parent Directory
 from custom.handlers import Handelrs
@@ -11,9 +14,33 @@ from config.config import Config
 
 app = Flask(__name__)
 
+_execution_id = None
+_start_watch = None
+
+def _trace_request_db(request):
+    pass
+
 @app.before_request
 def before_middleware():
-    print('endpoint: %s, url: %s, path: %s' % (request.endpoint, request.url, request.path))
+    _execution_id = str(uuid.uuid1()).lower()
+    _start_watch = datetime.now()
+
+    _port = request.environ.get('REMOTE_PORT')
+    _address = request.remote_addr
+    _behindProxyAddress = request.access_route
+    if(_behindProxyAddress):
+        _address = _behindProxyAddress
+    _method = request.method
+    _path = request.path
+    _protocol = request.schema
+
+    Logger.info(_execution_id, "Incoming " + _protocol + " Request from Remote Socket " + str(_address) + ":" + str(_port) + ". '" + _method + "' for '" + _path + "'")
+        
+    try :
+        _trace_request_db(request) 
+    except Exception as err :
+        Logger.warning(_execution_id, 'Error during Request Tracing', traceback.format_exc()) 
+
 
 @app.before_request
 def authorize():
@@ -28,6 +55,7 @@ def authenticate():
 
 @app.after_request
 def finally_middleware(response):
+    print("Arrivo uguale")
     return response
 
 @app.errorhandler(Exception)
