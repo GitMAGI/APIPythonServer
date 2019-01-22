@@ -1,5 +1,7 @@
 import getpass
 import inspect
+import json
+from sqlalchemy import create_engine
 from datetime import datetime
 
 import sys, os
@@ -54,7 +56,7 @@ def _logConsole(msg, payload, severity, scope, execution_id):
     userName = getpass.getuser()
     loginId = userName
     
-    _now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-2]
+    _now = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-2]
 
     _severity_string = _Severity[severity]
     
@@ -65,13 +67,36 @@ def _logConsole(msg, payload, severity, scope, execution_id):
     print(line)
 
 def _logDB(msg, payload, severity, scope, execution_id):
-    pass
+    userName = getpass.getuser()
+    loginId = userName
+    
+    _now = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-2]
+    _payload = json.dumps(payload) if payload is not None else None
+
+    _dialect = Config.journal_db_connection['dialect']
+    _storage = Config.journal_db_connection['storage']
+    engine = create_engine(_dialect + ":///" + _storage)
+    connection = engine.connect()
+    
+    connection.execute(
+        'INSERT INTO [Trace] (Scope, ServerName, User, Severity, OperationId, Timestamp, Message, Data) VALUES (:scope, :serverName, :user, :severity, :operationId, :timestamp, :message, :data)', 
+        { 
+            'scope': scope, 
+            'serverName': Config.app_hostname, 
+            'user': loginId, 
+            'severity': severity, 
+            'operationId': execution_id, 
+            'timestamp': _now, 
+            'message': msg, 
+            'data': _payload
+        }
+    )
 
 def _logFS(msg, payload, severity, scope, execution_id):
     userName = getpass.getuser()
     loginId = userName
     
-    _now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-2]
+    _now = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-2]
 
     _severity_string = _Severity[severity]
     
