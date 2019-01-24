@@ -32,24 +32,39 @@ def _trace_request_db(request):
     engine = create_engine(_dialect + ":///" + _storage)
     connection = engine.connect()
 
+    _headers = None
+    if(request.headers.keys()):
+        _headers = []
+        for key in request.headers.keys():
+            _value = request.headers.get(key)
+            _headers.append({key: _value})
+
+    _body = None
+    if(request.data):
+        _body = str(request.get_data().decode('utf-8'))
+        _body = _body.replace('\r', '')
+        _body = _body.replace('\n', '')
+        _body = _body.replace('\t', '')
+        _body = _body.strip()
+
     connection.execute(
-        'INSERT INTO [Request] ([OperationId], [Timestamp], [RemoteIp], [RemotePort], [RemoteProxyIp], [LocalIp], [LocalPort], [Protocol], [Verb], [Path], [Headers], [Body]) VALUES (:operationid, :timestamp, :remoteip, :remoteport, :remoteproxyip, :localip, :localport, :protocol, :verb, :path, :headers, :body)',
+        'INSERT INTO [Request] ([OperationId], [Timestamp], [RemoteIp], [RemotePort], [RemoteProxyIp], [RemoteProxyPort], [LocalIp], [LocalPort], [Protocol], [Verb], [Path], [Headers], [Body]) VALUES (:operationid, :timestamp, :remoteip, :remoteport, :remoteproxyip, :remoteproxyport, :localip, :localport, :protocol, :verb, :path, :headers, :body)',
         { 
             'operationid': _execution_id, 
             'timestamp': _now, 
-            'remoteip': _data['behindProxyAddresses'][0] if (_data['behindProxyAddresses']) else _data['address'],
-            'remoteport': _data['behindProxyPorts'][0] if (_data['behindProxyPorts']) else _data['port'], 
+            'remoteip': _data['address'],
+            'remoteport': _data['port'], 
             'remoteproxyip': dumps(_data['behindProxyAddresses']) if(_data['behindProxyAddresses']) else None,
+            'remoteproxyport': dumps(_data['behindProxyPorts']) if(_data['behindProxyPorts']) else None,
             'localip': _data['localAddress'], 
             'localport': _data['localPort'], 
             'protocol': _data['protocol'],
             'verb': _data['method'],
             'path': _data['path'],
-            'headers': dumps(request.headers.getlist) if (request.headers and request.headers.getlist) else None, 
-            'body': request.get_data().decode('utf-8') if(request.data) else None
+            'headers': dumps(_headers) if (_headers) else None, 
+            'body': _body if(_body) else None
         }
     )
-
 
 def _retrieve_request_info(request):
     _port = request.environ.get('REMOTE_PORT')
@@ -66,6 +81,17 @@ def _retrieve_request_info(request):
             _behindProxyPorts = [int(x.strip()) for x in request.environ.get('HTTP_X_FORWARDED_PORT').split(',')]
         except: 
             pass
+
+    if(_behindProxyAddresses):
+        _behindProxyAddresses.append(_address)
+        _address = str(_behindProxyAddresses[0])        
+        _behindProxyAddresses.pop(0)
+
+    if(_behindProxyPorts):
+        _behindProxyPorts.append(_port)
+        _port = _behindProxyPorts[0]        
+        _behindProxyPorts.pop(0)
+
     _method = request.method.upper()
     _path = request.path
     _protocol = request.scheme.upper()
@@ -102,6 +128,21 @@ def _trace_response_db(response, request):
     engine = create_engine(_dialect + ":///" + _storage)
     connection = engine.connect()
 
+    _headers = None
+    if(response.headers.keys()):
+        _headers = []
+        for key in response.headers.keys():
+            _value = response.headers.get(key)
+            _headers.append({key: _value})
+
+    _body = None
+    if(response.data):
+        _body = str(response.get_data().decode('utf-8'))
+        _body = _body.replace('\r', '')
+        _body = _body.replace('\n', '')
+        _body = _body.replace('\t', '')
+        _body = _body.strip()
+
     connection.execute(
         'INSERT INTO [Response] ([OperationId], [Timestamp], [Status], [RemoteIp], [RemotePort], [LocalIp], [LocalPort], [Headers], [Body]) VALUES (:operationid, :timestamp, :status, :remoteip, :remoteport, :localip, :localport, :headers, :body)',
         { 
@@ -112,8 +153,8 @@ def _trace_response_db(response, request):
             'remoteport': _data['port'], 
             'localip': _data['localAddress'], 
             'localport': _data['localPort'], 
-            'headers': dumps(response.headers.getlist) if(response.headers and response.headers.getlist) else None,  
-            'body': response.get_data().decode('utf-8')  if(response.data) else None
+            'headers': dumps(_headers) if(_headers) else None,  
+            'body': _body if(_body) else None
         }
     )
 
@@ -158,12 +199,6 @@ def before_middleware():
 
     _port = _request_info['port']
     _address = _request_info['address']
-    _behindProxyAddress = _request_info['behindProxyAddresses']
-    if(_behindProxyAddress):
-        _address = str(_behindProxyAddress[0])
-    _behindProxyPorts = _request_info['behindProxyPorts']
-    if(_behindProxyPorts):
-        _port = str(_behindProxyPorts[0])
     _method = _request_info['method']
     _path = _request_info['path']
     _protocol = _request_info['protocol']
