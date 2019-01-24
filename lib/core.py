@@ -1,13 +1,18 @@
 from flask import Flask, request, Response
+from json import dumps
+from sqlalchemy import create_engine
 from werkzeug.exceptions import BadRequest, HTTPException, Forbidden, Unauthorized, NotAcceptable, NotFound
 from datetime import datetime
 import uuid
 import traceback
 from inspect import getmembers
 from pprint import pprint
-from logger import Logger
+from .logger import Logger
+from .utilities import Utilities
+
 import sys, os
 sys.path.insert(1, os.path.join(sys.path[0], '..')) #Shortcut to import from parent Directory
+
 from custom.handlers import Handelrs
 from custom.routes import Routes
 from config.config import Config
@@ -18,29 +23,157 @@ _execution_id = None
 _start_watch = None
 
 def _trace_request_db(request):
-    pass
+    _data = _retrieve_request_info(request)
+
+    _now = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-2]
+
+    _dialect = Config.journal_db_connection['dialect']
+    _storage = Config.journal_db_connection['storage']
+    engine = create_engine(_dialect + ":///" + _storage)
+    connection = engine.connect()
+
+    connection.execute(
+        'INSERT INTO [Request] ([OperationId], [Timestamp], [RemoteIp], [RemotePort], [RemoteProxyIp], [LocalIp], [LocalPort], [Protocol], [Verb], [Path], [Headers], [Body]) VALUES (:operationid, :timestamp, :remoteip, :remoteport, :remoteproxyip, :localip, :localport, :protocol, :verb, :path, :headers, :body)',
+        { 
+            'operationid': _execution_id, 
+            'timestamp': _now, 
+            'remoteip': _data['behindProxyAddresses'][0] if (_data['behindProxyAddresses']) else _data['address'],
+            'remoteport': _data['behindProxyPorts'][0] if (_data['behindProxyPorts']) else _data['port'], 
+            'remoteproxyip': dumps(_data['behindProxyAddresses']) if(_data['behindProxyAddresses']) else None,
+            'localip': _data['localAddress'], 
+            'localport': _data['localPort'], 
+            'protocol': _data['protocol'],
+            'verb': _data['method'],
+            'path': _data['path'],
+            'headers': dumps(request.headers.getlist) if (request.headers and request.headers.getlist) else None, 
+            'body': request.get_data().decode('utf-8') if(request.data) else None
+        }
+    )
+
+
+def _retrieve_request_info(request):
+    _port = request.environ.get('REMOTE_PORT')
+    _address = request.remote_addr
+    _behindProxyAddresses = None
+    if(request.environ.get('HTTP_X_FORWARDED_FOR')):
+        try: 
+            _behindProxyAddresses = [x.strip() for x in request.environ.get('HTTP_X_FORWARDED_FOR').split(',')]
+        except: 
+            pass
+    _behindProxyPorts = None
+    if(request.environ.get('HTTP_X_FORWARDED_PORT')):
+        try: 
+            _behindProxyPorts = [int(x.strip()) for x in request.environ.get('HTTP_X_FORWARDED_PORT').split(',')]
+        except: 
+            pass
+    _method = request.method.upper()
+    _path = request.path
+    _protocol = request.scheme.upper()
+
+    _local = None
+    if(request.host):
+        _local = [x.strip() for x in request.host.split(':')]
+    _localAddress = None
+    if(_local and _local[0]):
+        _localAddress = _local[0] 
+    _localPort = None
+    if(_local and _local[1] and _local[1].isdigit()):
+        _localPort = int(_local[1]) 
+
+    return {
+        'address': _address,
+        'port': _port,
+        'behindProxyAddresses': _behindProxyAddresses,
+        'behindProxyPorts': _behindProxyPorts,
+        'method': _method,
+        'path': _path,
+        'protocol': _protocol,
+        'localAddress': _localAddress,
+        'localPort': _localPort
+    }
+
+def _trace_response_db(response, request):
+    _data = _retrieve_response_info(response, request)
+    
+    _now = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-2]
+
+    _dialect = Config.journal_db_connection['dialect']
+    _storage = Config.journal_db_connection['storage']
+    engine = create_engine(_dialect + ":///" + _storage)
+    connection = engine.connect()
+
+    connection.execute(
+        'INSERT INTO [Response] ([OperationId], [Timestamp], [Status], [RemoteIp], [RemotePort], [LocalIp], [LocalPort], [Headers], [Body]) VALUES (:operationid, :timestamp, :status, :remoteip, :remoteport, :localip, :localport, :headers, :body)',
+        { 
+            'operationid': _execution_id, 
+            'timestamp': _now, 
+            'status': _data['status'],
+            'remoteip': _data['address'],
+            'remoteport': _data['port'], 
+            'localip': _data['localAddress'], 
+            'localport': _data['localPort'], 
+            'headers': dumps(response.headers.getlist) if(response.headers and response.headers.getlist) else None,  
+            'body': response.get_data().decode('utf-8')  if(response.data) else None
+        }
+    )
+
+def _retrieve_response_info(response, request):
+    _request_info = _retrieve_request_info(request)
+
+    _port = _request_info['port']
+    _address = _request_info['address']
+    _behindProxyAddress = _request_info['behindProxyAddresses']
+    if(_behindProxyAddress):
+        _address = str(_behindProxyAddress[0])
+    _behindProxyPorts = _request_info['behindProxyPorts']
+    if(_behindProxyPorts):
+        _port = str(_behindProxyPorts[0])
+    _status = response.status_code
+    _local = None
+    if(request.host):
+        _local = [x.strip() for x in request.host.split(':')]
+    _localAddress = None
+    if(_local and _local[0]):
+        _localAddress = _local[0] 
+    _localPort = None
+    if(_local and _local[1] and _local[1].isdigit()):
+        _localPort = int(_local[1]) 
+
+    return {
+        'address': _address,
+        'port': _port,
+        'localAddress': _localAddress,
+        'localPort': _localPort,
+        'status': _status
+    }
 
 @app.before_request
 def before_middleware():
+    global _execution_id
     _execution_id = str(uuid.uuid1()).lower()
+    global _start_watch
     _start_watch = datetime.now()
 
-    _port = request.environ.get('REMOTE_PORT')
-    _address = request.remote_addr
-    _behindProxyAddress = request.access_route
+    _request_info = _retrieve_request_info(request)
+
+    _port = _request_info['port']
+    _address = _request_info['address']
+    _behindProxyAddress = _request_info['behindProxyAddresses']
     if(_behindProxyAddress):
-        _address = _behindProxyAddress
-    _method = request.method
-    _path = request.path
-    _protocol = request.schema
+        _address = str(_behindProxyAddress[0])
+    _behindProxyPorts = _request_info['behindProxyPorts']
+    if(_behindProxyPorts):
+        _port = str(_behindProxyPorts[0])
+    _method = _request_info['method']
+    _path = _request_info['path']
+    _protocol = _request_info['protocol']
 
     Logger.info(_execution_id, "Incoming " + _protocol + " Request from Remote Socket " + str(_address) + ":" + str(_port) + ". '" + _method + "' for '" + _path + "'")
         
     try :
         _trace_request_db(request) 
     except Exception as err :
-        Logger.warning(_execution_id, 'Error during Request Tracing', traceback.format_exc()) 
-
+        Logger.warning(_execution_id, 'Error during Request Tracing', str(err)) 
 
 @app.before_request
 def authorize():
@@ -55,7 +188,13 @@ def authenticate():
 
 @app.after_request
 def finally_middleware(response):
-    print("Arrivo uguale")
+    _end_watch = datetime.now()
+    _delta = round((_end_watch - _start_watch).microseconds/1000)
+    Logger.info(_execution_id, "Completed in " + Utilities.elapsedTime(_delta) + " (mm:ss.ms)")
+    try :
+        _trace_response_db(response, request) 
+    except Exception as err :
+        Logger.warning(_execution_id, 'Error during Request Tracing', str(err)) 
     return response
 
 @app.errorhandler(Exception)

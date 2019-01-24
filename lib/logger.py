@@ -6,6 +6,7 @@ from datetime import datetime
 
 import sys, os
 sys.path.insert(1, os.path.join(sys.path[0], '..')) #Shortcut to import from parent Directory
+
 from config.config import Config
 
 class Logger:
