@@ -78,20 +78,26 @@ def _logDB(msg, payload, severity, scope, execution_id):
     _storage = Config.journal_db_connection['storage']
     engine = create_engine(_dialect + ":///" + _storage)
     connection = engine.connect()
-    
-    connection.execute(
-        'INSERT INTO [Trace] (Scope, ServerName, User, Severity, OperationId, Timestamp, Message, Data) VALUES (:scope, :serverName, :user, :severity, :operationId, :timestamp, :message, :data)', 
-        { 
-            'scope': scope, 
-            'serverName': Config.app_hostname, 
-            'user': loginId, 
-            'severity': severity, 
-            'operationId': execution_id, 
-            'timestamp': _now, 
-            'message': msg, 
-            'data': _payload
-        }
-    )
+       
+    try:
+        connection.execute(
+            'INSERT INTO [Trace] (Scope, ServerName, User, Severity, OperationId, Timestamp, Message, Data) VALUES (:scope, :serverName, :user, :severity, :operationId, :timestamp, :message, :data)', 
+            { 
+                'scope': scope, 
+                'serverName': Config.app_hostname, 
+                'user': loginId, 
+                'severity': severity, 
+                'operationId': execution_id, 
+                'timestamp': _now, 
+                'message': msg, 
+                'data': _payload
+            }
+        )
+    except:
+        raise
+    finally:
+        connection.close()
+        engine.dispose()
 
 def _logFS(msg, payload, severity, scope, execution_id):
     userName = getpass.getuser()

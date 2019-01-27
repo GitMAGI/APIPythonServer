@@ -7,14 +7,19 @@ class Config:
 
     app_authentication_path = "/v1/auth"
 
+    jwt_secret = "5QApqHFhIxT1Tb5hfaFp7G6XyNDrXFfR"
+    jwt_mins_validity = 100
+
     journal_file_prefixname = 'journal'
     journal_file_path = '/Temp/APIPythonServer.local/logs/'
     journal_db_connection = {
         'dialect': 'sqlite',
-        'storage': '/Temp/APIPythonServer.local/assets/ServerJournal.db3',
-        'operatorsAliases': False,
-        'logging': False,
-        'define': {
-            'timestamps': False
-        }
+        'storage': '/Temp/APIPythonServer.local/assets/ServerJournal.db3'        
     }
+
+    account_db_connection = {
+        'dialect': 'sqlite',
+        'storage': '/Temp/APIPythonServer.local/assets/AccountRegistry.db3'
+    }
+
+    acl_json_path_filename = "/Temp/APIPythonServer.local/assets/ACL.json"

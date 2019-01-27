@@ -1,9 +1,10 @@
-from flask import Flask, request, Response
-from json import dumps
+from flask import Flask, request, jsonify, Response
+import json
 from sqlalchemy import create_engine
 from werkzeug.exceptions import BadRequest, HTTPException, Forbidden, Unauthorized, NotAcceptable, NotFound
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
+import jwt
 import traceback
 from inspect import getmembers
 from pprint import pprint
@@ -16,6 +17,8 @@ sys.path.insert(1, os.path.join(sys.path[0], '..')) #Shortcut to import from par
 from custom.handlers import Handelrs
 from custom.routes import Routes
 from config.config import Config
+from custom.authentication import Authentication
+from custom.authorization import Authorization
 
 app = Flask(__name__)
 
@@ -47,24 +50,30 @@ def _trace_request_db(request):
         _body = _body.replace('\t', '')
         _body = _body.strip()
 
-    connection.execute(
-        'INSERT INTO [Request] ([OperationId], [Timestamp], [RemoteIp], [RemotePort], [RemoteProxyIp], [RemoteProxyPort], [LocalIp], [LocalPort], [Protocol], [Verb], [Path], [Headers], [Body]) VALUES (:operationid, :timestamp, :remoteip, :remoteport, :remoteproxyip, :remoteproxyport, :localip, :localport, :protocol, :verb, :path, :headers, :body)',
-        { 
-            'operationid': _execution_id, 
-            'timestamp': _now, 
-            'remoteip': _data['address'],
-            'remoteport': _data['port'], 
-            'remoteproxyip': dumps(_data['behindProxyAddresses']) if(_data['behindProxyAddresses']) else None,
-            'remoteproxyport': dumps(_data['behindProxyPorts']) if(_data['behindProxyPorts']) else None,
-            'localip': _data['localAddress'], 
-            'localport': _data['localPort'], 
-            'protocol': _data['protocol'],
-            'verb': _data['method'],
-            'path': _data['path'],
-            'headers': dumps(_headers) if (_headers) else None, 
-            'body': _body if(_body) else None
-        }
-    )
+    try:
+        connection.execute(
+            'INSERT INTO [Request] ([OperationId], [Timestamp], [RemoteIp], [RemotePort], [RemoteProxyIp], [RemoteProxyPort], [LocalIp], [LocalPort], [Protocol], [Verb], [Path], [Headers], [Body]) VALUES (:operationid, :timestamp, :remoteip, :remoteport, :remoteproxyip, :remoteproxyport, :localip, :localport, :protocol, :verb, :path, :headers, :body)',
+            { 
+                'operationid': _execution_id, 
+                'timestamp': _now, 
+                'remoteip': _data['address'],
+                'remoteport': _data['port'], 
+                'remoteproxyip': json.dumps(_data['behindProxyAddresses']) if(_data['behindProxyAddresses']) else None,
+                'remoteproxyport': json.dumps(_data['behindProxyPorts']) if(_data['behindProxyPorts']) else None,
+                'localip': _data['localAddress'], 
+                'localport': _data['localPort'], 
+                'protocol': _data['protocol'],
+                'verb': _data['method'],
+                'path': _data['path'],
+                'headers': json.dumps(_headers) if (_headers) else None, 
+                'body': _body if(_body) else None
+            }
+        )
+    except:
+        raise
+    finally:
+        connection.close()
+        engine.dispose()
 
 def _retrieve_request_info(request):
     _port = request.environ.get('REMOTE_PORT')
@@ -143,20 +152,26 @@ def _trace_response_db(response, request):
         _body = _body.replace('\t', '')
         _body = _body.strip()
 
-    connection.execute(
-        'INSERT INTO [Response] ([OperationId], [Timestamp], [Status], [RemoteIp], [RemotePort], [LocalIp], [LocalPort], [Headers], [Body]) VALUES (:operationid, :timestamp, :status, :remoteip, :remoteport, :localip, :localport, :headers, :body)',
-        { 
-            'operationid': _execution_id, 
-            'timestamp': _now, 
-            'status': _data['status'],
-            'remoteip': _data['address'],
-            'remoteport': _data['port'], 
-            'localip': _data['localAddress'], 
-            'localport': _data['localPort'], 
-            'headers': dumps(_headers) if(_headers) else None,  
-            'body': _body if(_body) else None
-        }
-    )
+    try:
+        connection.execute(
+            'INSERT INTO [Response] ([OperationId], [Timestamp], [Status], [RemoteIp], [RemotePort], [LocalIp], [LocalPort], [Headers], [Body]) VALUES (:operationid, :timestamp, :status, :remoteip, :remoteport, :localip, :localport, :headers, :body)',
+            { 
+                'operationid': _execution_id, 
+                'timestamp': _now, 
+                'status': _data['status'],
+                'remoteip': _data['address'],
+                'remoteport': _data['port'], 
+                'localip': _data['localAddress'], 
+                'localport': _data['localPort'], 
+                'headers': json.dumps(_headers) if(_headers) else None,  
+                'body': _body if(_body) else None
+            }
+        )
+    except:
+        raise
+    finally:
+        connection.close()
+        engine.dispose()
 
 def _retrieve_response_info(response, request):
     _request_info = _retrieve_request_info(request)
@@ -209,17 +224,70 @@ def before_middleware():
         _trace_request_db(request) 
     except Exception as err :
         Logger.warning(_execution_id, 'Error during Request Tracing', str(err)) 
+    finally:
+        pass
+
+@app.before_request
+def error404_middleware():
+    notfound = True
+    for rule in app.url_map.iter_rules():
+        _current_path = request.url_rule.rule if request.url_rule else request.path
+        _current_method = request.method
+        if _current_method in rule.methods and _current_path == rule.rule:
+            notfound = False
+            break
+    if (notfound):
+        raise NotFound('Cannot ' + request.method + ' on ' + request.url)
+    else:
+        pass
 
 @app.before_request
 def authorize():
-    if(request.path == Config.app_authentication_path):
-        return Response('Home', status=200, mimetype='text/plain')
-    else:
-        raise Unauthorized("Errore. Non autorizzato")
+    if(request.path != Config.app_authentication_path):
+        _auth_header = request.environ.get('HTTP_X_ACCESS_TOKEN') or request.environ.get('HTTP_AUTHORIZATION') # Express headers are auto converted to lowercase
+        if(not _auth_header):
+            raise Unauthorized("Token is missing")
+        _jwt_token = _auth_header
 
-@app.before_request
-def authenticate():
-    raise Unauthorized("Errore. Non Autenticato")
+        bearer, _, _jwt_token = _auth_header.partition(' ')
+        if not bearer or bearer.lower() != "bearer":
+            raise Unauthorized('A Bearer Token was expected')
+
+        _user_id = None
+        _user_name = None
+        _user_groups = []
+
+        _method = request.method
+        _path = request.url_rule.rule if request.url_rule else request.path
+
+        try:
+            # AUTHENTICATION (JWT Validation)
+            _decoded = jwt.decode(_jwt_token, Config.jwt_secret)
+            _user = _decoded['data']['user'] if _decoded['data'] else None
+            if(not _user):
+                raise Unauthorized("User object not found into data of the Jwt")            
+            _user_id = _user['id'] if 'id' in _user else None
+            _user_name = _user['username'] if 'username' in _user else None
+            _user_groups = _user['groups'] if 'groups' in _user else None
+        except jwt.PyJWTError as e:
+            msg = e.args[0] if e.args else "Token Decoding Error"
+            if isinstance(e, jwt.DecodeError) :
+                msg = "Invalid or Malformed Token"                
+            elif isinstance(e, jwt.ExpiredSignatureError) :
+                msg = "Token expired"            
+            raise Unauthorized(msg)
+
+        try:
+            Authorization.authorize(_user_id, _user_name, _user_groups, _method, _path)
+        except Exception as err:
+            msg = str(err)
+            if isinstance(err, Forbidden):          
+                msg = err.description
+            raise Forbidden(msg)
+        finally:
+            pass
+    else:
+        pass
 
 @app.after_request
 def finally_middleware(response):
@@ -229,16 +297,85 @@ def finally_middleware(response):
     try :
         _trace_response_db(response, request) 
     except Exception as err :
-        Logger.warning(_execution_id, 'Error during Request Tracing', str(err)) 
-    return response
+        Logger.warning(_execution_id, 'Error during Response Tracing', str(err)) 
+    finally:
+        return response
 
 @app.errorhandler(Exception)
 def error_middleware(e):
-    if isinstance(e, HTTPException):
-        return Response(e.description, status=type(e).code, mimetype='text/plain')
-    else:
-        return Response(str(e), status=500, mimetype='text/plain')
+    response_data = None
+    response_status = 500
+    response_mimetype = 'text/plain'
+    response_content_type = 'text_plain'
+    response_headers = None
+    response_direct_passthrough = False
 
+    if isinstance(e, HTTPException):
+        Logger.error(_execution_id, e.description, str(e))
+
+        response_data = e.description
+        response_status = type(e).code
+        response_content_type = 'text/plain'
+        response_mimetype = 'text/plain'
+        response_headers = None
+        response_direct_passthrough = False
+    else:   
+        Logger.error(_execution_id, str(e), None)
+
+        response_data = 'Service Unavailable'
+        response_status = 500
+        response_content_type = 'text/plain'
+        response_mimetype = 'text/plain'
+        response_headers = None
+        response_direct_passthrough = False
+
+    response = app.response_class(
+        response=response_data, 
+        status=response_status, 
+        headers=response_headers, 
+        mimetype=response_mimetype, 
+        content_type=response_content_type, 
+        direct_passthrough=response_direct_passthrough
+    )
+
+    return response
+
+def _authentication_handler():
+    # VALIDATE AUTH Request
+    if(not request.data):
+        raise BadRequest('Request Body is missing') 
+
+    body = json.loads(request.get_data())
+
+    # AUTHENTICATION (Credentials) AND GET USER INFO
+    data = Authentication.authenticate(body)
+    
+    # GENERATE JWT        
+    jwt_token_expiration = datetime.now() + timedelta(minutes = int(Config.jwt_mins_validity))
+    jwt_token_expiration_string = jwt_token_expiration.strftime('%Y-%m-%d %H:%M:%S.%f')[:-2]
+    jwt_token = jwt.encode(
+        {
+            'exp':jwt_token_expiration, 
+            'data': {
+                'user': data 
+            }
+        }, 
+        Config.jwt_secret
+    )
+    
+    response = Response(
+        response=json.dumps({
+            "token": jwt_token.decode('utf8'),
+            "expiration": jwt_token_expiration_string
+        }),
+        status=200, 
+        mimetype='application/json', 
+        content_type='application/json',
+        direct_passthrough=False
+    )
+    return response
+
+app.route(Config.app_authentication_path, methods = ['POST'])(_authentication_handler)
 if Routes is not None and len(Routes):
     for Route in Routes:
         path = Route['path']

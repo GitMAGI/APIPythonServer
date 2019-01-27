@@ -25,7 +25,7 @@ def serverBootHttps():
     _full_hostname = "https://" + app_hostname + ":" + _port
     Logger.info(str(uuid.uuid1()).lower(), "Server is listening at " + _full_address + " or " + _full_hostname)
 
-if __name__ == '__main__':    
+if __name__ == '__main__':
     
     serverBootHttp()
     app.run(host=app_hostname, port=app_http_port, debug=False)
