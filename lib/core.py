@@ -230,9 +230,9 @@ def before_middleware():
 @app.before_request
 def error404_middleware():
     notfound = True
-    for rule in app.url_map.iter_rules():
-        _current_path = request.url_rule.rule if request.url_rule else request.path
-        _current_method = request.method
+    _current_path = request.url_rule.rule if request.url_rule else request.path
+    _current_method = request.method
+    for rule in app.url_map.iter_rules():        
         if _current_method in rule.methods and _current_path == rule.rule:
             notfound = False
             break
@@ -375,10 +375,10 @@ def _authentication_handler():
     )
     return response
 
-app.route(Config.app_authentication_path, methods = ['POST'])(_authentication_handler)
+app.route(Config.app_authentication_path, methods=['POST'], strict_slashes=False)(_authentication_handler)
 if Routes is not None and len(Routes):
     for Route in Routes:
         path = Route['path']
         handler = Handelrs[Route['handler']]
         methods = Route['methods']
-        app.route(path, methods = methods)(handler)
+        app.route(path, methods=methods, strict_slashes=False)(handler)
