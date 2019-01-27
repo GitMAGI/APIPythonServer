@@ -237,7 +237,7 @@ def error404_middleware():
             notfound = False
             break
     if (notfound):
-        raise NotFound('Cannot ' + request.method + ' on ' + request.url)
+        raise NotFound('Cannot ' + request.method + ' on ' + request.path)
     else:
         pass
 
