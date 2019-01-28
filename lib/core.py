@@ -279,10 +279,11 @@ def authorize():
 
         try:
             Authorization.authorize(_user_id, _user_name, _user_groups, _method, _path)
+        except HTTPException as err:
+            msg = err.description if err.description else str(err)
+            raise Forbidden(msg)
         except Exception as err:
-            msg = str(err)
-            if isinstance(err, Forbidden):          
-                msg = err.description
+            msg = err.args[0] if hasattr(err, 'args') else str(err)
             raise Forbidden(msg)
         finally:
             pass
